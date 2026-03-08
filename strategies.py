@@ -9,8 +9,10 @@ def base_logic(data: dict) -> Tuple[str, dict]:
 
     possible_moves = []
     for n in get_neighbors(my_head, board_width, board_height):
-        if n in safe_cells:
-            possible_moves.append(n)
+        # Explicit in-bounds guard (belt-and-suspenders safety)
+        if 0 <= n[0] < board_width and 0 <= n[1] < board_height:
+            if n in safe_cells:
+                possible_moves.append(n)
 
     if not possible_moves:
         return "up", {"possible_moves": [], "move_scores": {}, "voronoi_scores": {}, "my_head": my_head, "safe_cells": safe_cells, "board_width": board_width, "board_height": board_height}
@@ -25,6 +27,12 @@ def base_logic(data: dict) -> Tuple[str, dict]:
         v_score = get_voronoi_control(move, data, safe_cells_without_my_head, board_width, board_height)
         move_scores[move] = score
         voronoi_scores[move] = v_score
+
+    # Strip guaranteed dead-end moves (flood fill = 0 means we are completely blocked)
+    # Only remove them if there are other options available
+    nonzero_moves = [m for m in possible_moves if move_scores[m] > 0]
+    if nonzero_moves:
+        possible_moves = nonzero_moves
 
     return "", {"possible_moves": possible_moves, "move_scores": move_scores, "voronoi_scores": voronoi_scores, "my_head": my_head, "safe_cells": safe_cells, "board_width": board_width, "board_height": board_height}
 
@@ -326,6 +334,24 @@ def dynamic3_strategy(data: dict) -> str:
     survivable_moves = [m for m in ctx["possible_moves"] if ctx["move_scores"][m] >= my_length]
     if not survivable_moves:
         return fallback_survival(data, ctx)
+
+    # PHASE: Early Game (Turn < 20) — Prioritize food to grow competitively.
+    # Food Bot relentlessly eats, so Dynamic3 must match its growth rate early or it will
+    # always be smaller and lose head-on collisions in the mid/late game.
+    if data["turn"] < 20:
+        foods = [(f["x"], f["y"]) for f in data["board"]["food"]]
+        best_food_move = None
+        best_food_path_len = 999
+        if foods:
+            for food in foods:
+                path = a_star(my_head, food, ctx["safe_cells"], board_width, board_height)
+                if path and path[0] in survivable_moves:
+                    if len(path) < best_food_path_len:
+                        best_food_path_len = len(path)
+                        best_food_move = path[0]
+        if best_food_move:
+            print(f"Early Game Turn {data['turn']}: Forcing food pursuit.")
+            return direction_to(my_head, best_food_move)
 
     # 2. Choke Point (Bridge) Penalty
     bridges = find_bridges(ctx["safe_cells"], board_width, board_height)
